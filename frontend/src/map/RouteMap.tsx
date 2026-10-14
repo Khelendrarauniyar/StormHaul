@@ -7,15 +7,18 @@ import maplibregl, {
 } from "maplibre-gl";
 
 import { formatClock, formatValue } from "../lib/format";
+import { buildHeatCells, heatColorExpression } from "../lib/heat";
 import { RISK_META, riskLabel } from "../lib/risk";
 import { VARIABLES, routeColor, type WeatherVariable } from "../lib/variables";
-import type { CorridorPoint, RiskLevelName, RouteResult } from "../types";
+import type { HeatGrid, RiskLevelName, RouteResult } from "../types";
 import { MAP_STYLE } from "./mapStyle";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 interface RouteMapProps {
   routes: RouteResult[];
-  corridor: CorridorPoint[];
+  grid: HeatGrid | null;
+  heatDomain: [number, number];
+  showHeatmap: boolean;
   recommendedId: string;
   selectedRouteId: string | null;
   onSelectRoute: (id: string) => void;
@@ -24,7 +27,7 @@ interface RouteMapProps {
 }
 
 const ROUTE_LAYER_PREFIXES = ["route-line-", "checkpoint-circle-", "endpoint-"];
-const CORRIDOR_PREFIX = "corridor-";
+const HEAT_PREFIX = "heat-grid-";
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
@@ -132,7 +135,9 @@ function buildCheckpoints(route: RouteResult) {
 
 export function RouteMap({
   routes,
-  corridor,
+  grid,
+  heatDomain,
+  showHeatmap,
   recommendedId,
   selectedRouteId,
   onSelectRoute,
@@ -322,76 +327,45 @@ export function RouteMap({
     if (!map || !ready) {
       return;
     }
-    removeLayersAndSources(map, [CORRIDOR_PREFIX]);
 
-    const meta = VARIABLES[variable];
-    const hour = Math.max(0, forecastHour);
-    const activeRoute = selectedRouteId ?? routes[0]?.id ?? null;
-    const features = corridor
-      .filter((point) => point.route_id === activeRoute)
-      .map((point) => ({ point, value: point[meta.field][hour] }))
-      .filter((entry) => entry.value !== null && entry.value !== undefined)
-      .map((entry) => ({
-        type: "Feature" as const,
-        properties: { value: entry.value as number },
-        geometry: {
-          type: "Point" as const,
-          coordinates: [entry.point.longitude, entry.point.latitude],
+    const sourceId = `${HEAT_PREFIX}src`;
+    const layerId = `${HEAT_PREFIX}fill`;
+    const hasGrid = Boolean(grid && grid.points.length > 0);
+    const data = hasGrid
+      ? buildHeatCells(grid as HeatGrid, variable, forecastHour)
+      : { type: "FeatureCollection", features: [] };
+
+    const existing = map.getSource(sourceId) as GeoJSONSource | undefined;
+    if (existing) {
+      existing.setData(data as never);
+    } else {
+      map.addSource(sourceId, { type: "geojson", data: data as never });
+    }
+
+    const color = hasGrid
+      ? heatColorExpression(heatDomain, VARIABLES[variable].gradient)
+      : "#000000";
+    const opacity = hasGrid && showHeatmap ? 0.6 : 0;
+
+    if (map.getLayer(layerId)) {
+      map.setPaintProperty(layerId, "fill-color", color as never);
+      map.setPaintProperty(layerId, "fill-opacity", opacity);
+    } else {
+      map.addLayer(
+        {
+          id: layerId,
+          type: "fill",
+          source: sourceId,
+          paint: {
+            "fill-color": color as never,
+            "fill-opacity": opacity,
+            "fill-outline-color": "rgba(255, 255, 255, 0.25)",
+          },
         },
-      }));
-
-    setSource(map, `${CORRIDOR_PREFIX}src`, {
-      type: "FeatureCollection",
-      features,
-    });
-
-    const beforeId = firstLayerId(map, ROUTE_LAYER_PREFIXES);
-    map.addLayer(
-      {
-        id: `${CORRIDOR_PREFIX}heat`,
-        type: "heatmap",
-        source: `${CORRIDOR_PREFIX}src`,
-        paint: {
-          "heatmap-weight": [
-            "interpolate",
-            ["linear"],
-            ["get", "value"],
-            0,
-            0,
-            meta.max,
-            1,
-          ],
-          "heatmap-intensity": 0.9,
-          "heatmap-radius": [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            3,
-            22,
-            7,
-            50,
-          ],
-          "heatmap-opacity": 0.65,
-          "heatmap-color": [
-            "interpolate",
-            ["linear"],
-            ["heatmap-density"],
-            0,
-            "rgba(255,255,255,0)",
-            0.2,
-            meta.gradient[0],
-            0.5,
-            meta.gradient[2],
-            0.75,
-            meta.gradient[3],
-            1,
-            meta.gradient[4],
-          ],
-        },
-      },
-      beforeId,
-    );
-  }, [ready, corridor, selectedRouteId, variable, forecastHour, routes]);
+        firstLayerId(map, ROUTE_LAYER_PREFIXES),
+      );
+    }
+  }, [ready, grid, variable, forecastHour, heatDomain, showHeatmap, routes]);
 
   return <div ref={containerRef} className="map-canvas" />;
 }

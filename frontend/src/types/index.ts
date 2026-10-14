@@ -75,14 +75,26 @@ export interface RouteResult {
   checkpoints: Checkpoint[];
 }
 
-export interface CorridorPoint {
-  route_id: string;
+export interface HeatGridPoint {
   latitude: number;
   longitude: number;
-  cumulative_miles: number;
   wind_mph: (number | null)[];
   rain_in_hr: (number | null)[];
   snow_in_hr: (number | null)[];
+}
+
+export interface HeatGrid {
+  bounds: {
+    south: number;
+    north: number;
+    west: number;
+    east: number;
+  } | null;
+  rows: number;
+  columns: number;
+  spacing_latitude: number;
+  spacing_longitude: number;
+  points: HeatGridPoint[];
 }
 
 export interface PlaceInfo {
@@ -111,7 +123,7 @@ export interface RoutePlanResponse {
   load_weight_lb: number;
   forecast_coverage: ForecastCoverage;
   forecast_times: string[];
-  corridor: CorridorPoint[];
+  grid: HeatGrid;
   routes: RouteResult[];
   recommended_route_id: string;
   recommendation_reasons: string[];

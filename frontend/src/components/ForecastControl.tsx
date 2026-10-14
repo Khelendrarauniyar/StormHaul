@@ -10,6 +10,8 @@ interface ForecastControlProps {
   onVariableChange: (variable: WeatherVariable) => void;
   coverage: ForecastCoverage;
   weatherAvailable: boolean;
+  heatmapVisible: boolean;
+  onToggleHeatmap: (visible: boolean) => void;
 }
 
 export function ForecastControl({
@@ -20,6 +22,8 @@ export function ForecastControl({
   onVariableChange,
   coverage,
   weatherAvailable,
+  heatmapVisible,
+  onToggleHeatmap,
 }: ForecastControlProps) {
   const maxHour = Math.max(0, times.length - 1);
   const currentTime = times[Math.min(hour, maxHour)] ?? coverage.start;
@@ -55,6 +59,15 @@ export function ForecastControl({
           </button>
         ))}
       </div>
+      <label className="heat-toggle">
+        <input
+          type="checkbox"
+          checked={heatmapVisible}
+          onChange={(event) => onToggleHeatmap(event.target.checked)}
+          disabled={!weatherAvailable}
+        />
+        Weather heat map
+      </label>
       {!weatherAvailable ? (
         <p className="forecast-warning">
           Forecast coverage is unavailable for this request; the slider is disabled.

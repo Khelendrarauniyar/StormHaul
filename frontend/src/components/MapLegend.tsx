@@ -1,3 +1,4 @@
+import { formatValue } from "../lib/format";
 import { RISK_META, RISK_ORDER } from "../lib/risk";
 import { VARIABLES, routeColor, type WeatherVariable } from "../lib/variables";
 import type { RouteResult } from "../types";
@@ -5,22 +6,28 @@ import type { RouteResult } from "../types";
 interface MapLegendProps {
   routes: RouteResult[];
   recommendedId: string;
-  selectedRouteId: string | null;
   variable: WeatherVariable;
   forecastLabel: string;
   weatherAvailable: boolean;
+  heatDomain: [number, number] | null;
+}
+
+function legendDigits(variable: WeatherVariable): number {
+  return variable === "wind" ? 0 : 2;
 }
 
 export function MapLegend({
   routes,
   recommendedId,
-  selectedRouteId,
   variable,
   forecastLabel,
   weatherAvailable,
+  heatDomain,
 }: MapLegendProps) {
   const variableMeta = VARIABLES[variable];
-  const selected = routes.find((route) => route.id === selectedRouteId);
+  const digits = legendDigits(variable);
+  const showScale = weatherAvailable && heatDomain !== null;
+  const midpoint = heatDomain ? (heatDomain[0] + heatDomain[1]) / 2 : 0;
 
   return (
     <div className="map-legend">
@@ -61,7 +68,7 @@ export function MapLegend({
         <h4>
           {variableMeta.label} ({variableMeta.unit})
         </h4>
-        {weatherAvailable ? (
+        {showScale ? (
           <>
             <div
               className="legend-gradient"
@@ -70,12 +77,12 @@ export function MapLegend({
               }}
             />
             <div className="legend-scale">
-              <span>0</span>
-              <span>{variableMeta.max}</span>
+              <span>{formatValue(heatDomain![0], digits)}</span>
+              <span>{formatValue(midpoint, digits)}</span>
+              <span>{formatValue(heatDomain![1], digits)}</span>
             </div>
             <p className="legend-note">
-              Corridor heatmap for {selected?.label ?? "selected route"} at{" "}
-              {forecastLabel}. Values are sampled, not a high-resolution model.
+              Forecast heat map for {forecastLabel}. Each cell is the {variableMeta.label.toLowerCase()} value on a grid covering the planned routes, scaled to the range above.
             </p>
           </>
         ) : (

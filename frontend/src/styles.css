@@ -661,6 +661,20 @@ h4 {
   gap: 8px;
 }
 
+.heat-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.heat-toggle input {
+  accent-color: var(--accent);
+}
+
 .chip {
   border: 1px solid var(--border);
   background: #fff;

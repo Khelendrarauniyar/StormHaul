@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { ForecastControl } from "./components/ForecastControl";
 import { MapLegend } from "./components/MapLegend";
@@ -8,6 +8,7 @@ import { StatusBanner } from "./components/StatusBanner";
 import { TopBar } from "./components/TopBar";
 import { useRoutePlan } from "./hooks/useRoutePlan";
 import { formatClock } from "./lib/format";
+import { computeHeatDomain } from "./lib/heat";
 import type { WeatherVariable } from "./lib/variables";
 import { RouteMap } from "./map/RouteMap";
 import type { RoutePlanRequest, RoutePlanResponse } from "./types";
@@ -17,6 +18,7 @@ export default function App() {
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [forecastHour, setForecastHour] = useState(0);
   const [variable, setVariable] = useState<WeatherVariable>("wind");
+  const [showHeatmap, setShowHeatmap] = useState(true);
   const { status, error, run, reset } = useRoutePlan();
 
   const handlePlan = async (input: RoutePlanRequest) => {
@@ -25,6 +27,7 @@ export default function App() {
       setPlan(result);
       setSelectedRouteId(result.recommended_route_id);
       setForecastHour(0);
+      setShowHeatmap(true);
     }
   };
 
@@ -32,8 +35,16 @@ export default function App() {
     setPlan(null);
     setSelectedRouteId(null);
     setForecastHour(0);
+    setShowHeatmap(true);
     reset();
   };
+
+  const heatDomain = useMemo<[number, number] | null>(() => {
+    if (!plan || plan.grid.points.length === 0) {
+      return null;
+    }
+    return computeHeatDomain(plan.grid, variable);
+  }, [plan, variable]);
 
   const forecastLabel = plan
     ? formatClock(
@@ -101,7 +112,9 @@ export default function App() {
         <main className="canvas">
           <RouteMap
             routes={plan?.routes ?? []}
-            corridor={plan?.corridor ?? []}
+            grid={plan?.grid ?? null}
+            heatDomain={heatDomain ?? [0, 1]}
+            showHeatmap={showHeatmap}
             recommendedId={plan?.recommended_route_id ?? ""}
             selectedRouteId={selectedRouteId}
             onSelectRoute={setSelectedRouteId}
@@ -132,10 +145,10 @@ export default function App() {
               <MapLegend
                 routes={plan.routes}
                 recommendedId={plan.recommended_route_id}
-                selectedRouteId={selectedRouteId}
                 variable={variable}
                 forecastLabel={forecastLabel}
                 weatherAvailable={plan.weather_available}
+                heatDomain={heatDomain}
               />
               <div className="forecast-dock">
                 <ForecastControl
@@ -146,6 +159,8 @@ export default function App() {
                   onVariableChange={setVariable}
                   coverage={plan.forecast_coverage}
                   weatherAvailable={plan.weather_available}
+                  heatmapVisible={showHeatmap}
+                  onToggleHeatmap={setShowHeatmap}
                 />
               </div>
             </>
