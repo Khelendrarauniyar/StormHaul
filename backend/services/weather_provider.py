@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import requests
 
@@ -18,6 +18,12 @@ DEFAULT_TIMEOUT = float(os.getenv("WEATHER_TIMEOUT_SECONDS", "20"))
 COORDINATE_PRECISION = 3
 BATCH_SIZE = 25
 WEATHER_ATTEMPTS = 3
+BACKOFF_BASE_SECONDS = 1.0
+BACKOFF_MAX_SECONDS = 20.0
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+DEFAULT_USER_AGENT = "StormHaul/1.0 (+https://github.com/khelendrarauniyar/StormHaul)"
+CUSTOMER_BASE_URL = "https://customer-api.open-meteo.com"
+PUBLIC_BASE_URL = "https://api.open-meteo.com"
 
 HOURLY_FIELDS = (
     "temperature_2m",
@@ -32,28 +38,73 @@ HOURLY_FIELDS = (
 SeriesKey = Tuple[float, float]
 
 
+def user_agent() -> str:
+    return os.getenv("WEATHER_USER_AGENT", DEFAULT_USER_AGENT)
+
+
+def round_key(latitude: float, longitude: float) -> SeriesKey:
+    return (round(latitude, COORDINATE_PRECISION), round(longitude, COORDINATE_PRECISION))
+
+
+def api_key() -> str:
+    return os.getenv("OPEN_METEO_API_KEY", "").strip()
+
+
+def base_url() -> str:
+    if api_key():
+        return os.getenv("OPEN_METEO_CUSTOMER_BASE_URL", CUSTOMER_BASE_URL).rstrip("/")
+    return os.getenv("WEATHER_BASE_URL", PUBLIC_BASE_URL).rstrip("/")
+
+
+def sleep_backoff(attempt: int, headers: Optional[dict]) -> None:
+    delay = BACKOFF_BASE_SECONDS * (2 ** attempt)
+    if headers:
+        retry_after = headers.get("Retry-After")
+        if retry_after:
+            try:
+                delay = max(delay, float(retry_after))
+            except (TypeError, ValueError):
+                pass
+    time.sleep(min(delay, BACKOFF_MAX_SECONDS))
+
+
 class WeatherClient:
+    name = "open-meteo"
+
     def __init__(self, forecast_days: int = 4, timeout: Optional[float] = None):
         self.forecast_days = forecast_days
         self.timeout = timeout or DEFAULT_TIMEOUT
         self._cache: Dict[SeriesKey, Dict[str, list]] = {}
 
-    def fetch(self, points: Iterable[Tuple[float, float]]) -> None:
+    def fetch(self, points: Iterable[Tuple[float, float]]) -> Set[SeriesKey]:
+        keys = self._unique_keys(points)
+        succeeded: Set[SeriesKey] = set()
+        for start in range(0, len(keys), BATCH_SIZE):
+            batch = keys[start : start + BATCH_SIZE]
+            try:
+                self._fetch_batch(batch)
+            except WeatherProviderError as exc:
+                logger.warning("Open-Meteo batch failed: %s", exc)
+                continue
+            succeeded.update(batch)
+        if keys and not succeeded:
+            raise WeatherProviderError("Open-Meteo is unavailable.")
+        return succeeded
+
+    def _unique_keys(
+        self, points: Iterable[Tuple[float, float]]
+    ) -> List[SeriesKey]:
         keys: List[SeriesKey] = []
-        seen = set()
+        seen: Set[SeriesKey] = set()
         for latitude, longitude in points:
-            key = (round(latitude, COORDINATE_PRECISION), round(longitude, COORDINATE_PRECISION))
+            key = round_key(latitude, longitude)
             if key in self._cache or key in seen:
                 continue
             seen.add(key)
             keys.append(key)
-
-        for start in range(0, len(keys), BATCH_SIZE):
-            batch = keys[start : start + BATCH_SIZE]
-            self._fetch_batch(batch)
+        return keys
 
     def _fetch_batch(self, batch: Sequence[SeriesKey]) -> None:
-        base = os.getenv("WEATHER_BASE_URL", "https://api.open-meteo.com").rstrip("/")
         params = {
             "latitude": ",".join(f"{lat:.4f}" for lat, _ in batch),
             "longitude": ",".join(f"{lon:.4f}" for _, lon in batch),
@@ -62,23 +113,15 @@ class WeatherClient:
             "timezone": "GMT",
             "forecast_days": self.forecast_days,
         }
-        payload = None
-        for attempt in range(WEATHER_ATTEMPTS):
-            try:
-                response = requests.get(
-                    f"{base}/v1/forecast", params=params, timeout=self.timeout
-                )
-                response.raise_for_status()
-                payload = response.json()
-                break
-            except requests.RequestException as exc:
-                if attempt < WEATHER_ATTEMPTS - 1:
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
-                logger.warning("Open-Meteo request failed: %s", exc)
-                raise WeatherProviderError("Open-Meteo is unavailable.") from exc
-            except ValueError as exc:
-                raise WeatherProviderError("Open-Meteo returned malformed JSON.") from exc
+        key = api_key()
+        if key:
+            params["apikey"] = key
+
+        response = self._request(f"{base_url()}/v1/forecast", params)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise WeatherProviderError("Open-Meteo returned malformed JSON.") from exc
 
         items = payload if isinstance(payload, list) else [payload]
         if len(items) != len(batch):
@@ -89,9 +132,34 @@ class WeatherClient:
         for key, item in zip(batch, items):
             self._cache[key] = _parse_item(item)
 
+    def _request(self, url: str, params: dict):
+        headers = {"User-Agent": user_agent()}
+        last_error: Optional[Exception] = None
+        for attempt in range(WEATHER_ATTEMPTS):
+            try:
+                response = requests.get(
+                    url, params=params, headers=headers, timeout=self.timeout
+                )
+                response.raise_for_status()
+                return response
+            except requests.HTTPError as exc:
+                last_error = exc
+                status = getattr(exc.response, "status_code", None)
+                if status is not None and status not in RETRYABLE_STATUS:
+                    logger.warning("Open-Meteo request failed: %s", exc)
+                    raise WeatherProviderError("Open-Meteo is unavailable.") from exc
+                if attempt < WEATHER_ATTEMPTS - 1:
+                    sleep_backoff(attempt, getattr(exc.response, "headers", None))
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < WEATHER_ATTEMPTS - 1:
+                    sleep_backoff(attempt, None)
+
+        logger.warning("Open-Meteo request failed: %s", last_error)
+        raise WeatherProviderError("Open-Meteo is unavailable.") from last_error
+
     def get(self, latitude: float, longitude: float) -> Optional[Dict[str, list]]:
-        key = (round(latitude, COORDINATE_PRECISION), round(longitude, COORDINATE_PRECISION))
-        return self._cache.get(key)
+        return self._cache.get(round_key(latitude, longitude))
 
 
 def _parse_item(item: dict) -> Dict[str, list]:

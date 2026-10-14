@@ -45,7 +45,7 @@ hour forecast slider).
 | Map rendering | Route polylines, checkpoint markers, grid heatmap | MapLibre GL JS (keyless OpenFreeMap style) |
 | Django API | Validation, orchestration, response schema, safe error shape | Django 5.2 + DRF |
 | Routing adapter | Geocoding + three alternative route geometries/durations | OpenRouteService -> OSRM demo -> synthetic |
-| Weather adapter | Hourly wind/rain/snow for a coordinate + estimated arrival time | Open-Meteo (no API key) |
+| Weather adapter | Hourly wind/rain/snow for a coordinate + estimated arrival time | Open-Meteo with MET Norway fallback (no API key) |
 | Domain services | Checkpoint generation, ETA interpolation, risk classification, ranking | Pure Python functions + unit tests |
 
 ### Data flow (one request, end to end)
@@ -58,7 +58,9 @@ hour forecast slider).
    chosen interval (`services/checkpoints.py`).
 5. Interpolate each checkpoint ETA proportionally to cumulative distance.
 6. Fetch hourly weather for every unique checkpoint and heat-map grid coordinate
-   in batched Open-Meteo requests (`services/weather_provider.py`).
+   in batched Open-Meteo requests, falling back per coordinate to MET Norway when
+   the primary provider is rate limited or unavailable
+   (`services/weather_service.py`).
 7. Classify wind/rain/snow per checkpoint and apply load overrides
    (`services/risk.py`).
 8. Aggregate risk mileage and distance-weighted average risk per route.
@@ -85,8 +87,10 @@ StormHaul/
 │   │   ├── recommendation.py   # ranking + explanation
 │   │   ├── routing_provider.py # geocoding + ORS/OSRM/synthetic routing
 │   │   ├── weather_provider.py # Open-Meteo hourly client
+│   │   ├── met_provider.py     # MET Norway fallback client
+│   │   ├── weather_service.py    # provider chain + per-coordinate source
 │   │   └── pipeline.py         # orchestration and response assembly
-│   ├── tests/                  # risk, checkpoint, grid, geo, ranking, API tests
+│   ├── tests/                  # risk, checkpoint, grid, geo, weather, API tests
 │   ├── requirements.txt
 │   └── .env.example
 ├── frontend/
@@ -150,6 +154,9 @@ to `http://127.0.0.1:8000`, so CORS is not needed locally.
 | `ORS_API_KEY` | empty | Enables OpenRouteService HGV routing. |
 | `PROVIDER_TIMEOUT_SECONDS` | `12` | Routing/geocoding request timeout (seconds). |
 | `WEATHER_TIMEOUT_SECONDS` | `20` | Weather request timeout (seconds). |
+| `WEATHER_PROVIDER` | `open-meteo` | Primary weather provider. |
+| `WEATHER_FALLBACK_PROVIDER` | `met-no` | Fallback provider for unresolved coordinates. |
+| `OPEN_METEO_API_KEY` | empty | Optional; switches Open-Meteo to the customer endpoint with higher limits. |
 
 **frontend/.env**
 
@@ -332,6 +339,14 @@ npm run build
   also accepted.
 - **Weather:** Open-Meteo hourly forecast (`wind_speed_10m`, `rain`, `snowfall`,
   `temperature_2m`), no key. Rain is converted mm->in/hr and snowfall cm->in/hr.
+  The public Open-Meteo endpoint is rate limited per IP address and can reject
+  requests from shared cloud hosts. StormHaul retries transient `429`/`5xx`
+  responses with backoff, requests remaining coordinates from MET Norway
+  (`api.met.no`, required `User-Agent`, m/s converted to mph, `symbol_code` split
+  into rain/snow), and reports the mix in `data_sources.weather`. Setting
+  `OPEN_METEO_API_KEY` switches to the higher-limit customer endpoint. MET Norway
+  data is licensed CC BY 4.0 and credited to the Norwegian Meteorological
+  Institute.
 - **Map:** keyless OpenFreeMap vector tiles via MapLibre GL JS. Attribution is
   shown on the map.
 
@@ -344,10 +359,11 @@ degradation is surfaced in `warnings`.
 
 - Checkpoint ETAs are interpolated proportionally to distance; provider step
   durations are not yet used for per-vertex timing.
-- The heat map is a regular latitude/longitude grid sampled from Open-Meteo over
-  the area around the routes; each cell reports the forecast at its centre, so it
-  is smoother and coarser than a high-resolution meteorological model. Unavailable
-  hours are not fabricated, and the colour scale adapts to the data range.
+- The heat map is a regular latitude/longitude grid sampled from the weather
+  providers over the area around the routes; each cell reports the forecast at
+  its centre, so it is smoother and coarser than a high-resolution meteorological
+  model. Unavailable hours are not fabricated, and the colour scale adapts to the
+  data range.
 - Checkpoint risk uses the most-severe-hazard rule; the numeric average-risk
   mapping is an implementation choice.
 - The OSRM demo profile is a car profile, so HGV restrictions and truck-specific
@@ -366,7 +382,7 @@ degradation is surfaced in `warnings`.
 | Decision | Choice | Rationale |
 | --- | --- | --- |
 | Routing provider | ORS HGV -> OSRM demo -> synthetic | Real alternatives with a key; fully demonstrable without one. |
-| Weather provider | Open-Meteo | No key, hourly wind/rain/snow, 48h+ coverage. |
+| Weather provider | Open-Meteo -> MET Norway | Open-Meteo is keyless and hourly; MET Norway covers coordinates when it is rate limited. |
 | Map | MapLibre + OpenFreeMap | Keyless, no token, easy deployment. |
 | ETA method | Distance-proportional interpolation | Provider-agnostic and documented as an approximation. |
 | Risk combination | Most severe hazard | Simple, explainable, avoids invented weighting. |

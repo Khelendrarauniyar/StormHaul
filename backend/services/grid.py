@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Optional, Sequence, Tuple
 
-GRID_MAX_POINTS = 180
+GRID_MAX_POINTS = 120
 GRID_MIN_DIM = 6
 GRID_PAD_FRACTION = 0.15
 GRID_PAD_MIN_DEGREES = 0.2

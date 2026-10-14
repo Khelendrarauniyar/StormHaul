@@ -94,3 +94,35 @@ class WeatherRetryTests(SimpleTestCase):
             client.fetch([(40.0, -105.0)])
 
         self.assertEqual(get.call_count, 3)
+
+    @patch("services.weather_provider.time.sleep", return_value=None)
+    @patch("services.weather_provider.requests.get")
+    def test_retries_on_rate_limit_then_succeeds(self, get, _sleep):
+        throttled = Mock()
+        response = requests.Response()
+        response.status_code = 429
+        throttled.raise_for_status.side_effect = requests.HTTPError(response=response)
+        succeeding = Mock()
+        succeeding.raise_for_status.return_value = None
+        succeeding.json.return_value = self._payload()
+        get.side_effect = [throttled, succeeding]
+
+        client = WeatherClient()
+        client.fetch([(40.0, -105.0)])
+
+        self.assertIsNotNone(client.get(40.0, -105.0))
+        self.assertEqual(get.call_count, 2)
+
+    @patch("services.weather_provider.requests.get")
+    def test_does_not_retry_on_client_error(self, get):
+        rejected = Mock()
+        response = requests.Response()
+        response.status_code = 400
+        rejected.raise_for_status.side_effect = requests.HTTPError(response=response)
+        get.return_value = rejected
+
+        client = WeatherClient()
+        with self.assertRaises(WeatherProviderError):
+            client.fetch([(40.0, -105.0)])
+
+        self.assertEqual(get.call_count, 1)

@@ -17,7 +17,8 @@ from .models import (
 from .recommendation import recommend
 from .risk import assess_checkpoint_weather, summarize_route
 from .routing_provider import geocode, get_alternatives
-from .weather_provider import WeatherClient, align_series, floor_to_hour, value_at
+from .weather_provider import align_series, floor_to_hour, value_at
+from .weather_service import build_weather_service
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +96,9 @@ def build_route_plan(params: dict) -> dict:
     grid_spec = build_grid(grid_bounds) if grid_bounds else None
 
     forecast_start = floor_to_hour(departure)
-    weather_client = WeatherClient()
+    weather_client = build_weather_service()
     weather_available = True
+    sources: List[str] = []
     try:
         weather_points = [
             (checkpoint.latitude, checkpoint.longitude)
@@ -106,6 +108,7 @@ def build_route_plan(params: dict) -> dict:
         if grid_spec:
             weather_points.extend(grid_spec["points"])
         weather_client.fetch(weather_points)
+        sources = weather_client.sources
     except WeatherProviderError as exc:
         logger.warning("Weather provider unavailable: %s", exc)
         weather_available = False
@@ -114,6 +117,14 @@ def build_route_plan(params: dict) -> dict:
             "forecast values and risk mileage excludes them."
         )
 
+    if weather_available and sources:
+        providers = weather_client.providers
+        if providers and providers[0] not in sources:
+            warnings.append(
+                f"The primary weather provider ({providers[0]}) was unavailable; "
+                f"weather data was sourced from the fallback provider ({', '.join(sources)})."
+            )
+
     for route in route_results:
         for checkpoint in route.checkpoints:
             series = (
@@ -121,7 +132,14 @@ def build_route_plan(params: dict) -> dict:
                 if weather_available
                 else None
             )
-            checkpoint.weather = _build_sample(series, checkpoint.arrival_at, weather_available)
+            source = (
+                weather_client.source_for(checkpoint.latitude, checkpoint.longitude)
+                if weather_available
+                else None
+            )
+            checkpoint.weather = _build_sample(
+                series, checkpoint.arrival_at, weather_available, source
+            )
             assessment = assess_checkpoint_weather(checkpoint.weather, load_weight_lb)
             checkpoint.wind_level = assessment.wind
             checkpoint.rain_level = assessment.rain
@@ -150,7 +168,7 @@ def build_route_plan(params: dict) -> dict:
         "data_sources": {
             "geocoding": origin.source if origin.source == destination.source else "mixed",
             "routing": routing_source,
-            "weather": "open-meteo" if weather_available else "unavailable",
+            "weather": ",".join(sources) if weather_available and sources else "unavailable",
         },
         "origin": _place_payload(origin),
         "destination": _place_payload(destination),
@@ -201,7 +219,10 @@ def _place_payload(place: GeoPlace) -> dict:
 
 
 def _build_sample(
-    series: Optional[Dict[str, list]], arrival: datetime, weather_available: bool
+    series: Optional[Dict[str, list]],
+    arrival: datetime,
+    weather_available: bool,
+    source: Optional[str],
 ) -> WeatherSample:
     if not weather_available or not series:
         return WeatherSample(
@@ -221,13 +242,13 @@ def _build_sample(
         temperature_c=value_at(series, "temperature_c", arrival),
         observed_at=observed_at,
         available=True,
-        source="open-meteo",
+        source=source or "unavailable",
     )
 
 
 def _build_grid(
     spec: Optional[dict],
-    client: WeatherClient,
+    client,
     forecast_start: datetime,
     weather_available: bool,
 ) -> dict:

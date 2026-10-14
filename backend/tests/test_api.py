@@ -37,15 +37,24 @@ def _series():
     }
 
 
-class FakeWeatherClient:
+class FakeWeatherService:
+    providers = ["open-meteo"]
+
     def __init__(self, *args, **kwargs):
-        pass
+        self.points = []
+
+    @property
+    def sources(self):
+        return ["open-meteo"]
 
     def fetch(self, points):
         self.points = list(points)
 
     def get(self, latitude, longitude):
         return _series()
+
+    def source_for(self, latitude, longitude):
+        return "open-meteo"
 
 
 class RoutePlanApiTests(TestCase):
@@ -64,9 +73,11 @@ class RoutePlanApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_successful_route_plan(self):
-        with mock.patch("services.pipeline.geocode", side_effect=_place), mock.patch(
+        with mock.patch("services.pipeline.geocode", side_effect=_place        ), mock.patch(
             "services.pipeline.get_alternatives", return_value=(_routes(), "test", [])
-        ), mock.patch("services.pipeline.WeatherClient", FakeWeatherClient):
+        ), mock.patch(
+            "services.pipeline.build_weather_service", FakeWeatherService
+        ):
             response = self.client.post(
                 "/api/route-plans/", self.payload, format="json"
             )
@@ -151,7 +162,9 @@ class RoutePlanApiTests(TestCase):
             side_effect=AssertionError("geocoding should be skipped"),
         ), mock.patch(
             "services.pipeline.get_alternatives", return_value=(_routes(), "test", [])
-        ), mock.patch("services.pipeline.WeatherClient", FakeWeatherClient):
+        ), mock.patch(
+            "services.pipeline.build_weather_service", FakeWeatherService
+        ):
             response = self.client.post("/api/route-plans/", payload, format="json")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["origin"]["source"], "selected")
@@ -179,7 +192,10 @@ class RoutePlanApiTests(TestCase):
         self.assertEqual(response.json()["error"]["code"], "provider_error")
 
     def test_weather_failure_degrades_gracefully(self):
-        class BrokenWeatherClient:
+        class BrokenWeatherService:
+            providers = ["open-meteo"]
+            sources = []
+
             def __init__(self, *args, **kwargs):
                 pass
 
@@ -191,9 +207,14 @@ class RoutePlanApiTests(TestCase):
             def get(self, latitude, longitude):
                 return None
 
+            def source_for(self, latitude, longitude):
+                return None
+
         with mock.patch("services.pipeline.geocode", side_effect=_place), mock.patch(
             "services.pipeline.get_alternatives", return_value=(_routes(), "test", [])
-        ), mock.patch("services.pipeline.WeatherClient", BrokenWeatherClient):
+        ), mock.patch(
+            "services.pipeline.build_weather_service", BrokenWeatherService
+        ):
             response = self.client.post(
                 "/api/route-plans/", self.payload, format="json"
             )
