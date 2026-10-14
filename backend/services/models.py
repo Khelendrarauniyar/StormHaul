@@ -90,17 +90,6 @@ class RouteRiskSummary:
 
 
 @dataclass
-class CorridorPoint:
-    route_id: str
-    latitude: float
-    longitude: float
-    cumulative_miles: float
-    wind_mph: List[Optional[float]] = field(default_factory=list)
-    rain_in_hr: List[Optional[float]] = field(default_factory=list)
-    snow_in_hr: List[Optional[float]] = field(default_factory=list)
-
-
-@dataclass
 class RouteResult:
     id: str
     label: str

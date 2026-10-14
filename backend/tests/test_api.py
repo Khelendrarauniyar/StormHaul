@@ -83,6 +83,9 @@ class RoutePlanApiTests(TestCase):
         self.assertTrue(
             all(checkpoint["combined_risk"] is not None for checkpoint in first_route["checkpoints"])
         )
+        grid = data["grid"]
+        self.assertEqual(len(grid["points"]), grid["rows"] * grid["columns"])
+        self.assertTrue(all(len(point["wind_mph"]) == 48 for point in grid["points"]))
 
     def test_validation_error_shape(self):
         response = self.client.post("/api/route-plans/", {}, format="json")
@@ -198,3 +201,4 @@ class RoutePlanApiTests(TestCase):
         data = response.json()
         self.assertFalse(data["weather_available"])
         self.assertIsNone(data["routes"][0]["checkpoints"][0]["combined_risk"])
+        self.assertEqual(data["grid"]["points"], [])

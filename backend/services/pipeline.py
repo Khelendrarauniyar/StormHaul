@@ -6,11 +6,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from .checkpoints import build_checkpoints
-from .exceptions import ProviderError, WeatherProviderError
-from .geo import cumulative_miles, sample_along_route
+from .exceptions import WeatherProviderError
+from .grid import build_grid, route_bounds, union_bounds
 from .models import (
     Checkpoint,
-    CorridorPoint,
     GeoPlace,
     RouteResult,
     WeatherSample,
@@ -22,8 +21,6 @@ from .weather_provider import WeatherClient, align_series, floor_to_hour, value_
 
 logger = logging.getLogger(__name__)
 
-CORRIDOR_INTERVAL_MILES = 25.0
-CORRIDOR_MAX_POINTS = 30
 FORECAST_HOURS = 48
 
 ASSUMPTIONS = [
@@ -42,6 +39,9 @@ ASSUMPTIONS = [
     "A route is marked infeasible when any No Travel segment is present; feasible "
     "routes always rank above infeasible ones.",
     "Weather is sampled at the hour bucket containing the estimated arrival time.",
+    "The heat map is a regular latitude/longitude grid sampled around the planned "
+    "routes; each cell reports the forecast at its centre, so the field is coarser "
+    "than a numerical weather model.",
     "Units: distance in miles, wind in mph (sustained), rain and snow in inches per hour.",
 ]
 
@@ -91,6 +91,9 @@ def build_route_plan(params: dict) -> dict:
             )
         )
 
+    grid_bounds = union_bounds([route_bounds(route.coordinates) for route in route_results])
+    grid_spec = build_grid(grid_bounds) if grid_bounds else None
+
     forecast_start = floor_to_hour(departure)
     weather_client = WeatherClient()
     weather_available = True
@@ -100,7 +103,8 @@ def build_route_plan(params: dict) -> dict:
             for route in route_results
             for checkpoint in route.checkpoints
         ]
-        weather_points.extend(_corridor_points(route_results))
+        if grid_spec:
+            weather_points.extend(grid_spec["points"])
         weather_client.fetch(weather_points)
     except WeatherProviderError as exc:
         logger.warning("Weather provider unavailable: %s", exc)
@@ -129,7 +133,7 @@ def build_route_plan(params: dict) -> dict:
 
     recommended, reasons = recommend(route_results)
 
-    corridor = _build_corridor(route_results, weather_client, forecast_start, weather_available)
+    grid = _build_grid(grid_spec, weather_client, forecast_start, weather_available)
 
     warnings.extend(_coverage_warnings(route_results))
 
@@ -162,7 +166,7 @@ def build_route_plan(params: dict) -> dict:
             (forecast_start + timedelta(hours=offset)).isoformat()
             for offset in range(FORECAST_HOURS)
         ],
-        "corridor": corridor,
+        "grid": grid,
         "routes": [_route_payload(route) for route in route_results],
         "recommended_route_id": recommended.id,
         "recommendation_reasons": reasons,
@@ -221,46 +225,49 @@ def _build_sample(
     )
 
 
-def _corridor_points(route_results: List[RouteResult]):
-    points = []
-    for route in route_results:
-        geometric_total = cumulative_miles(route.coordinates)[-1] if route.coordinates else 0.0
-        scale = (route.distance_miles / geometric_total) if geometric_total > 0 else 0.0
-        for latitude, longitude, _ in sample_along_route(
-            route.coordinates, CORRIDOR_INTERVAL_MILES, CORRIDOR_MAX_POINTS
-        ):
-            points.append((latitude, longitude))
-    return points
-
-
-def _build_corridor(
-    route_results: List[RouteResult],
+def _build_grid(
+    spec: Optional[dict],
     client: WeatherClient,
     forecast_start: datetime,
     weather_available: bool,
-) -> List[dict]:
-    corridor: List[dict] = []
-    for route in route_results:
-        geometric = cumulative_miles(route.coordinates)
-        geometric_total = geometric[-1] if geometric else 0.0
-        scale = (route.distance_miles / geometric_total) if geometric_total > 0 else 0.0
-        for latitude, longitude, distance in sample_along_route(
-            route.coordinates, CORRIDOR_INTERVAL_MILES, CORRIDOR_MAX_POINTS
-        ):
-            series = client.get(latitude, longitude) if weather_available else None
-            wind, rain, snow = align_series(series, forecast_start, FORECAST_HOURS)
-            corridor.append(
-                CorridorPoint(
-                    route_id=route.id,
-                    latitude=round(latitude, 5),
-                    longitude=round(longitude, 5),
-                    cumulative_miles=round(distance * scale, 3),
-                    wind_mph=[None if v is None else round(v, 2) for v in wind],
-                    rain_in_hr=[None if v is None else round(v, 4) for v in rain],
-                    snow_in_hr=[None if v is None else round(v, 4) for v in snow],
-                ).__dict__
-            )
-    return corridor
+) -> dict:
+    if not spec:
+        return {
+            "bounds": None,
+            "rows": 0,
+            "columns": 0,
+            "spacing_latitude": 0.0,
+            "spacing_longitude": 0.0,
+            "points": [],
+        }
+
+    meta = {
+        "bounds": {
+            key: round(value, 6) for key, value in spec["bounds"].items()
+        },
+        "rows": spec["rows"],
+        "columns": spec["columns"],
+        "spacing_latitude": round(spec["spacing_latitude"], 6),
+        "spacing_longitude": round(spec["spacing_longitude"], 6),
+    }
+
+    if not weather_available:
+        return {**meta, "points": []}
+
+    points: List[dict] = []
+    for latitude, longitude in spec["points"]:
+        series = client.get(latitude, longitude)
+        wind, rain, snow = align_series(series, forecast_start, FORECAST_HOURS)
+        points.append(
+            {
+                "latitude": round(latitude, 5),
+                "longitude": round(longitude, 5),
+                "wind_mph": [None if v is None else round(v, 2) for v in wind],
+                "rain_in_hr": [None if v is None else round(v, 4) for v in rain],
+                "snow_in_hr": [None if v is None else round(v, 4) for v in snow],
+            }
+        )
+    return {**meta, "points": points}
 
 
 def _route_payload(route: RouteResult) -> dict:
