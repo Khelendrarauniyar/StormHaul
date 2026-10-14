@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
@@ -42,6 +43,17 @@ class MetNoClient:
         self.max_workers = max_workers or DEFAULT_WORKERS
         self.deadline = DEFAULT_DEADLINE
         self._cache: Dict[SeriesKey, Dict[str, list]] = {}
+        self._local = threading.local()
+
+    def _session(self) -> requests.Session:
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = requests.Session()
+            session.headers.update(
+                {"User-Agent": user_agent(), "Accept": "application/json"}
+            )
+            self._local.session = session
+        return session
 
     def fetch(self, points) -> Set[SeriesKey]:
         keys = self._unique_keys(points)
@@ -85,14 +97,12 @@ class MetNoClient:
     def _fetch_one(self, key: SeriesKey) -> Dict[str, list]:
         latitude, longitude = key
         params = {"lat": round(latitude, ROUNDING_DEGREES), "lon": round(longitude, ROUNDING_DEGREES)}
-        headers = {"User-Agent": user_agent(), "Accept": "application/json"}
         url = f"{base_url()}/weatherapi/locationforecast/2.0/compact"
+        session = self._session()
         last_error: Optional[Exception] = None
         for attempt in range(WEATHER_ATTEMPTS):
             try:
-                response = requests.get(
-                    url, params=params, headers=headers, timeout=self.timeout
-                )
+                response = session.get(url, params=params, timeout=self.timeout)
                 response.raise_for_status()
                 payload = response.json()
                 return _parse_timeseries(payload)
