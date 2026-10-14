@@ -114,7 +114,7 @@ def assess_checkpoint_weather(
 
     if weather.wind_mph is not None:
         wind_level, wind_reason = assess_wind(weather.wind_mph, load_weight_lb)
-        if wind_reason:
+        if wind_reason and wind_level is RiskLevel.NO_TRAVEL:
             reasons.append(wind_reason)
 
     if weather.rain_in_hr is not None:

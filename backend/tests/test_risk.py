@@ -121,6 +121,16 @@ class CombinedRiskTests(SimpleTestCase):
         self.assertEqual(assessment.combined, RiskLevel.NO_TRAVEL)
         self.assertTrue(assessment.no_travel_reason)
 
+    def test_load_escalation_to_severe_has_no_no_travel_reason(self):
+        assessment = assess_checkpoint_weather(self._sample(40.0, 0.0, 0.0), 45_000)
+        self.assertEqual(assessment.combined, RiskLevel.SEVERE)
+        self.assertIsNone(assessment.no_travel_reason)
+
+    def test_load_no_travel_has_reason(self):
+        assessment = assess_checkpoint_weather(self._sample(50.0, 0.0, 0.0), 45_000)
+        self.assertEqual(assessment.combined, RiskLevel.NO_TRAVEL)
+        self.assertIsNotNone(assessment.no_travel_reason)
+
 
 class SummarizeRouteTests(SimpleTestCase):
     def _checkpoint(self, sequence, miles, risk):
