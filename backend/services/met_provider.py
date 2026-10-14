@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -24,7 +24,8 @@ MPS_TO_MPH = 2.2369362920544
 ROUNDING_DEGREES = 4
 DEFAULT_BASE_URL = "https://api.met.no"
 DEFAULT_TIMEOUT = float(os.getenv("WEATHER_TIMEOUT_SECONDS", "20"))
-DEFAULT_WORKERS = int(os.getenv("MET_NO_WORKERS", "8"))
+DEFAULT_WORKERS = int(os.getenv("MET_NO_WORKERS", "16"))
+DEFAULT_DEADLINE = float(os.getenv("MET_NO_DEADLINE_SECONDS", "25"))
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 SNOW_TOKENS = ("snow", "sleet")
 
@@ -39,15 +40,17 @@ class MetNoClient:
     def __init__(self, timeout: Optional[float] = None, max_workers: Optional[int] = None):
         self.timeout = timeout or DEFAULT_TIMEOUT
         self.max_workers = max_workers or DEFAULT_WORKERS
+        self.deadline = DEFAULT_DEADLINE
         self._cache: Dict[SeriesKey, Dict[str, list]] = {}
 
     def fetch(self, points) -> Set[SeriesKey]:
         keys = self._unique_keys(points)
         if not keys:
             return set()
-        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-            futures = {pool.submit(self._fetch_one, key): key for key in keys}
-            for future in as_completed(futures):
+        pool = ThreadPoolExecutor(max_workers=self.max_workers)
+        futures = {pool.submit(self._fetch_one, key): key for key in keys}
+        try:
+            for future in as_completed(futures, timeout=self.deadline):
                 key = futures[future]
                 try:
                     series = future.result()
@@ -56,6 +59,13 @@ class MetNoClient:
                     continue
                 if series is not None:
                     self._cache[key] = series
+        except TimeoutError:
+            logger.warning(
+                "MET Norway deadline of %.1fs reached; returning partial coverage.",
+                self.deadline,
+            )
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         succeeded = {key for key in keys if key in self._cache}
         if not succeeded:
             raise WeatherProviderError("MET Norway is unavailable.")

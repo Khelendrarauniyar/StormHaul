@@ -156,6 +156,9 @@ to `http://127.0.0.1:8000`, so CORS is not needed locally.
 | `WEATHER_TIMEOUT_SECONDS` | `20` | Weather request timeout (seconds). |
 | `WEATHER_PROVIDER` | `open-meteo` | Primary weather provider. |
 | `WEATHER_FALLBACK_PROVIDER` | `met-no` | Fallback provider for unresolved coordinates. |
+| `WEATHER_FETCH_DEADLINE_SECONDS` | `20` | Max time for the primary provider per request. |
+| `MET_NO_WORKERS` | `16` | Concurrent requests used for the fallback provider. |
+| `MET_NO_DEADLINE_SECONDS` | `25` | Max time for the fallback provider per request. |
 | `OPEN_METEO_API_KEY` | empty | Optional; switches Open-Meteo to the customer endpoint with higher limits. |
 
 **frontend/.env**
@@ -340,8 +343,9 @@ npm run build
 - **Weather:** Open-Meteo hourly forecast (`wind_speed_10m`, `rain`, `snowfall`,
   `temperature_2m`), no key. Rain is converted mm->in/hr and snowfall cm->in/hr.
   The public Open-Meteo endpoint is rate limited per IP address and can reject
-  requests from shared cloud hosts. StormHaul retries transient `429`/`5xx`
-  responses with backoff, requests remaining coordinates from MET Norway
+  requests from shared cloud hosts. StormHaul fails fast on `429` so rate
+  limiting does not delay the request, retries transient `5xx` responses briefly,
+  then requests remaining coordinates from MET Norway
   (`api.met.no`, required `User-Agent`, m/s converted to mph, `symbol_code` split
   into rain/snow), and reports the mix in `data_sources.weather`. Setting
   `OPEN_METEO_API_KEY` switches to the higher-limit customer endpoint. MET Norway

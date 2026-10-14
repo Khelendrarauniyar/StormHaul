@@ -8,19 +8,20 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import requests
 
-from .exceptions import WeatherProviderError
+from .exceptions import WeatherProviderError, WeatherProviderRateLimited
 
 logger = logging.getLogger(__name__)
 
 MM_PER_INCH = 25.4
 CM_PER_INCH = 2.54
 DEFAULT_TIMEOUT = float(os.getenv("WEATHER_TIMEOUT_SECONDS", "20"))
+FETCH_DEADLINE = float(os.getenv("WEATHER_FETCH_DEADLINE_SECONDS", "20"))
 COORDINATE_PRECISION = 3
 BATCH_SIZE = 25
-WEATHER_ATTEMPTS = 3
-BACKOFF_BASE_SECONDS = 1.0
-BACKOFF_MAX_SECONDS = 20.0
-RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+WEATHER_ATTEMPTS = 2
+BACKOFF_BASE_SECONDS = 0.5
+BACKOFF_MAX_SECONDS = 5.0
+RETRYABLE_STATUS = {500, 502, 503, 504}
 DEFAULT_USER_AGENT = "StormHaul/1.0 (+https://github.com/khelendrarauniyar/StormHaul)"
 CUSTOMER_BASE_URL = "https://customer-api.open-meteo.com"
 PUBLIC_BASE_URL = "https://api.open-meteo.com"
@@ -74,15 +75,27 @@ class WeatherClient:
     def __init__(self, forecast_days: int = 4, timeout: Optional[float] = None):
         self.forecast_days = forecast_days
         self.timeout = timeout or DEFAULT_TIMEOUT
+        self.deadline = FETCH_DEADLINE
+        self._deadline_at: Optional[float] = None
         self._cache: Dict[SeriesKey, Dict[str, list]] = {}
 
     def fetch(self, points: Iterable[Tuple[float, float]]) -> Set[SeriesKey]:
         keys = self._unique_keys(points)
         succeeded: Set[SeriesKey] = set()
+        self._deadline_at = time.monotonic() + self.deadline
         for start in range(0, len(keys), BATCH_SIZE):
+            if time.monotonic() >= self._deadline_at:
+                logger.warning(
+                    "Open-Meteo deadline of %.1fs reached; returning partial coverage.",
+                    self.deadline,
+                )
+                break
             batch = keys[start : start + BATCH_SIZE]
             try:
                 self._fetch_batch(batch)
+            except WeatherProviderRateLimited as exc:
+                logger.warning("Open-Meteo rate limited: %s", exc)
+                break
             except WeatherProviderError as exc:
                 logger.warning("Open-Meteo batch failed: %s", exc)
                 continue
@@ -136,15 +149,25 @@ class WeatherClient:
         headers = {"User-Agent": user_agent()}
         last_error: Optional[Exception] = None
         for attempt in range(WEATHER_ATTEMPTS):
+            timeout = self.timeout
+            if self._deadline_at is not None:
+                remaining = self._deadline_at - time.monotonic()
+                if remaining <= 0:
+                    raise WeatherProviderError("Open-Meteo deadline reached.")
+                timeout = min(timeout, remaining)
             try:
                 response = requests.get(
-                    url, params=params, headers=headers, timeout=self.timeout
+                    url, params=params, headers=headers, timeout=timeout
                 )
                 response.raise_for_status()
                 return response
             except requests.HTTPError as exc:
                 last_error = exc
                 status = getattr(exc.response, "status_code", None)
+                if status == 429:
+                    raise WeatherProviderRateLimited(
+                        "Open-Meteo rate limited this client."
+                    ) from exc
                 if status is not None and status not in RETRYABLE_STATUS:
                     logger.warning("Open-Meteo request failed: %s", exc)
                     raise WeatherProviderError("Open-Meteo is unavailable.") from exc

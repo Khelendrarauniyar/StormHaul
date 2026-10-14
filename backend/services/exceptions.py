@@ -19,3 +19,7 @@ class GeocodingNotFound(GeocodingError):
 
 class WeatherProviderError(ProviderError):
     pass
+
+
+class WeatherProviderRateLimited(WeatherProviderError):
+    pass

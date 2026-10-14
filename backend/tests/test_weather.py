@@ -4,7 +4,13 @@ import requests
 from django.test import SimpleTestCase
 
 from services.exceptions import WeatherProviderError
-from services.weather_provider import CM_PER_INCH, MM_PER_INCH, WeatherClient, _parse_item
+from services.weather_provider import (
+    CM_PER_INCH,
+    MM_PER_INCH,
+    WEATHER_ATTEMPTS,
+    WeatherClient,
+    _parse_item,
+)
 
 
 class ParseWeatherItemTests(SimpleTestCase):
@@ -93,25 +99,40 @@ class WeatherRetryTests(SimpleTestCase):
         with self.assertRaises(WeatherProviderError):
             client.fetch([(40.0, -105.0)])
 
-        self.assertEqual(get.call_count, 3)
+        self.assertEqual(get.call_count, WEATHER_ATTEMPTS)
 
     @patch("services.weather_provider.time.sleep", return_value=None)
     @patch("services.weather_provider.requests.get")
-    def test_retries_on_rate_limit_then_succeeds(self, get, _sleep):
-        throttled = Mock()
+    def test_retries_on_server_error_then_succeeds(self, get, _sleep):
+        faulty = Mock()
         response = requests.Response()
-        response.status_code = 429
-        throttled.raise_for_status.side_effect = requests.HTTPError(response=response)
+        response.status_code = 503
+        faulty.raise_for_status.side_effect = requests.HTTPError(response=response)
         succeeding = Mock()
         succeeding.raise_for_status.return_value = None
         succeeding.json.return_value = self._payload()
-        get.side_effect = [throttled, succeeding]
+        get.side_effect = [faulty, succeeding]
 
         client = WeatherClient()
         client.fetch([(40.0, -105.0)])
 
         self.assertIsNotNone(client.get(40.0, -105.0))
         self.assertEqual(get.call_count, 2)
+
+    @patch("services.weather_provider.time.sleep", return_value=None)
+    @patch("services.weather_provider.requests.get")
+    def test_rate_limit_fails_fast_without_retry(self, get, _sleep):
+        throttled = Mock()
+        response = requests.Response()
+        response.status_code = 429
+        throttled.raise_for_status.side_effect = requests.HTTPError(response=response)
+        get.return_value = throttled
+
+        client = WeatherClient()
+        with self.assertRaises(WeatherProviderError):
+            client.fetch([(40.0, -105.0)])
+
+        self.assertEqual(get.call_count, 1)
 
     @patch("services.weather_provider.requests.get")
     def test_does_not_retry_on_client_error(self, get):
