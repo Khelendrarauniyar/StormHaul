@@ -237,10 +237,12 @@ Load overrides (applied on top of the wind band):
 
 Displayed ranges in the brief touch at values such as 25, 35, 45 mph and
 0.25 in/hr. StormHaul assigns every touching boundary to the **more hazardous**
-category (`>=`), so 25 -> Moderate, 35 -> High, 45 -> Severe. The one exception is
-the top band, which the brief states as strictly greater: rain **> 1.00 in/hr**
-and snow **> 3.0 in/hr** are No Travel, while exactly 1.00 / 3.0 remain Severe.
-These values are covered by boundary tests in `backend/tests/test_risk.py`.
+category (`>=`), so 25 -> Moderate, 35 -> High, 45 -> Severe. Where the brief
+states a limit as strictly greater, StormHaul follows it: rain **> 1.00 in/hr**
+and snow **> 3.0 in/hr** are No Travel (exactly 1.00 / 3.0 stay Severe), and the
+load overrides trigger only **above** 30,000 lb / 40,000 lb (exactly at either
+value the band is unchanged). These values are covered by boundary tests in
+`backend/tests/test_risk.py`.
 
 ### Combined checkpoint risk
 
@@ -370,6 +372,3 @@ degradation is surfaced in `warnings`.
 | Risk combination | Most severe hazard | Simple, explainable, avoids invented weighting. |
 | No Travel policy | Route marked infeasible; feasible routes preferred | Prudent safety default; documented as a product choice. |
 | Forecast limitation | Unavailable hours returned as null and reported | Never fabricates weather data. |
-
----
-
