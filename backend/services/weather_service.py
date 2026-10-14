@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from .exceptions import WeatherProviderError
@@ -9,6 +10,8 @@ from .met_provider import MetNoClient
 from .weather_provider import SeriesKey, WeatherClient, round_key
 
 logger = logging.getLogger(__name__)
+
+TOTAL_DEADLINE = float(os.getenv("WEATHER_TOTAL_DEADLINE_SECONDS", "18"))
 
 
 class WeatherService:
@@ -28,9 +31,20 @@ class WeatherService:
 
     def fetch(self, points: Iterable[Tuple[float, float]]) -> None:
         pending = self._pending_keys(points)
+        deadline_at = time.monotonic() + TOTAL_DEADLINE
         for provider in self._providers:
             if not pending:
                 break
+            remaining = deadline_at - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    "Weather deadline of %.1fs reached; skipping %s.",
+                    TOTAL_DEADLINE,
+                    provider.name,
+                )
+                break
+            if hasattr(provider, "deadline"):
+                provider.deadline = remaining
             try:
                 succeeded = provider.fetch(pending)
             except WeatherProviderError as exc:

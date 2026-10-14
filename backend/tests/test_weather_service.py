@@ -4,7 +4,7 @@ from django.test import SimpleTestCase
 
 from services.exceptions import WeatherProviderError
 from services.weather_provider import round_key
-from services.weather_service import WeatherService, build_weather_service
+from services.weather_service import TOTAL_DEADLINE, WeatherService, build_weather_service
 
 
 def _series():
@@ -76,3 +76,22 @@ class WeatherServiceTests(SimpleTestCase):
         with mock.patch.dict("os.environ", {}, clear=True):
             service = build_weather_service()
         self.assertEqual(service.providers, ["open-meteo", "met-no"])
+
+    def test_bounds_each_provider_by_the_total_budget(self):
+        class DeadlineProvider(FakeProvider):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.deadline = None
+
+        primary = DeadlineProvider(keys=[(40.0, -105.0)])
+        primary.name = "open-meteo"
+        fallback = DeadlineProvider(keys=[(41.0, -106.0)])
+        fallback.name = "met-no"
+
+        service = WeatherService([primary, fallback])
+        service.fetch([(40.0, -105.0), (41.0, -106.0)])
+
+        self.assertIsNotNone(primary.deadline)
+        self.assertGreater(primary.deadline, 0)
+        self.assertLessEqual(primary.deadline, TOTAL_DEADLINE)
+        self.assertLessEqual(fallback.deadline, TOTAL_DEADLINE)
