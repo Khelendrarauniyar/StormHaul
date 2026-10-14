@@ -7,7 +7,7 @@ risk-mileage priority order.
 
 Built for the Spotter AI Full Stack Developer assessment: a Django REST API
 (routing + weather orchestration, risk engine, ranking) and a React + TypeScript
-+ MapLibre GL frontend (map, checkpoint inspector, corridor heatmap and a 0-48
++ MapLibre GL frontend (map, checkpoint inspector, grid heatmap and a 0-48
 hour forecast slider).
 
 ---
@@ -28,7 +28,8 @@ hour forecast slider).
 - **Lexicographic recommendation**: fewest Severe miles -> fewest High miles ->
   lowest average risk -> shortest travel time, with a deterministic tie-break.
 - **Interactive map**: three coloured route lines, selectable checkpoint markers
-  with popups, origin/destination markers, and a per-route corridor heatmap.
+  with popups, origin/destination markers, and a toggleable grid heatmap that
+  paints the forecast field around the routes.
 - **0-48 hour forecast slider** with a wind / rain / snow variable selector and a
   legend tied to the active variable.
 - **Clear UI states**: loading, empty, validation, provider failure, partial
@@ -41,7 +42,7 @@ hour forecast slider).
 | Layer | Responsibility | Implementation |
 | --- | --- | --- |
 | React UI | Form, route cards, checkpoint table, map, legend, forecast slider, states | React 18 + TypeScript + Vite |
-| Map rendering | Route polylines, checkpoint markers, corridor heatmap | MapLibre GL JS (keyless OpenFreeMap style) |
+| Map rendering | Route polylines, checkpoint markers, grid heatmap | MapLibre GL JS (keyless OpenFreeMap style) |
 | Django API | Validation, orchestration, response schema, safe error shape | Django 5.2 + DRF |
 | Routing adapter | Geocoding + three alternative route geometries/durations | OpenRouteService -> OSRM demo -> synthetic |
 | Weather adapter | Hourly wind/rain/snow for a coordinate + estimated arrival time | Open-Meteo (no API key) |
@@ -56,14 +57,14 @@ hour forecast slider).
 4. Compute cumulative distance along each geometry and place checkpoints at the
    chosen interval (`services/checkpoints.py`).
 5. Interpolate each checkpoint ETA proportionally to cumulative distance.
-6. Fetch hourly weather for every unique checkpoint/corridor coordinate in
-   batched Open-Meteo requests (`services/weather_provider.py`).
+6. Fetch hourly weather for every unique checkpoint and heat-map grid coordinate
+   in batched Open-Meteo requests (`services/weather_provider.py`).
 7. Classify wind/rain/snow per checkpoint and apply load overrides
    (`services/risk.py`).
 8. Aggregate risk mileage and distance-weighted average risk per route.
 9. Rank routes and build recommendation reasons
    (`services/recommendation.py`).
-10. Return geometry, checkpoints, summaries, corridor forecast, assumptions and
+10. Return geometry, checkpoints, summaries, grid forecast, assumptions and
     warnings (`services/pipeline.py`).
 
 ---
@@ -79,12 +80,13 @@ StormHaul/
 │   │   ├── models.py           # internal dataclasses + risk enum
 │   │   ├── geo.py              # haversine, cumulative distance, interpolation
 │   │   ├── checkpoints.py      # distance-based checkpoint sampling
+│   │   ├── grid.py             # heat-map grid over the route area
 │   │   ├── risk.py             # thresholds, load rules, risk mileage
 │   │   ├── recommendation.py   # ranking + explanation
 │   │   ├── routing_provider.py # geocoding + ORS/OSRM/synthetic routing
 │   │   ├── weather_provider.py # Open-Meteo hourly client
 │   │   └── pipeline.py         # orchestration and response assembly
-│   ├── tests/                  # risk, checkpoint, geo, ranking, API tests
+│   ├── tests/                  # risk, checkpoint, grid, geo, ranking, API tests
 │   ├── requirements.txt
 │   └── .env.example
 ├── frontend/
@@ -93,7 +95,7 @@ StormHaul/
 │   │   ├── components/         # form, place typeahead, cards, legend, slider, banners
 │   │   ├── map/                # MapLibre setup, layers, heatmap
 │   │   ├── hooks/              # request state
-│   │   ├── lib/                # formatting, risk + variable metadata
+│   │   ├── lib/                # formatting, risk/variable metadata, heat-map helpers
 │   │   └── types/              # shared API types
 │   └── .env.example
 ├── README.md
@@ -182,7 +184,8 @@ exact coordinates are used. Provide both or neither for each endpoint.
 Response (selected fields):
 
 - `request_id`, `generated_at`, `units`, `data_sources`, `origin`, `destination`
-- `forecast_coverage`, `forecast_times[]`, `corridor[]` (hourly per sample point)
+- `forecast_coverage`, `forecast_times[]`, `grid` (heat-map bounds, dimensions and
+  hourly per-cell wind/rain/snow)
 - `routes[]`: `id`, `label`, `geometry`, `distance_miles`, `duration_seconds`,
   `arrival_at`, `feasible`, `risk_summary`, `checkpoints[]`
 - `routes[].checkpoints[]`: `sequence`, `coordinate`, `cumulative_miles`,
@@ -296,6 +299,7 @@ Coverage includes:
 - Checkpoint spacing: exact multiple, partial final segment, route shorter than
   the interval, zero-length route.
 - ETA interpolation and monotonic arrivals.
+- Heat-map grid bounds, padding, dimensions and point placement.
 - Ranking order and tie-breaks; no-feasible-route reporting.
 - API success, validation error shape, and graceful weather-provider failure.
 
@@ -338,9 +342,10 @@ degradation is surfaced in `warnings`.
 
 - Checkpoint ETAs are interpolated proportionally to distance; provider step
   durations are not yet used for per-vertex timing.
-- The corridor heatmap shows points sampled along each route and their forecast
-  values for the selected variable/time; it is not a high-resolution
-  meteorological model. Unavailable hours are not fabricated.
+- The heat map is a regular latitude/longitude grid sampled from Open-Meteo over
+  the area around the routes; each cell reports the forecast at its centre, so it
+  is smoother and coarser than a high-resolution meteorological model. Unavailable
+  hours are not fabricated, and the colour scale adapts to the data range.
 - Checkpoint risk uses the most-severe-hazard rule; the numeric average-risk
   mapping is an implementation choice.
 - The OSRM demo profile is a car profile, so HGV restrictions and truck-specific
@@ -348,7 +353,7 @@ degradation is surfaced in `warnings`.
 - Route geometry is simplified on the server (Douglas-Peucker, ~0.0005 degrees,
   then rounded to 5 decimals) to keep responses small; checkpoint placement and
   ETA interpolation run on the simplified line. Responses for a three-route
-  500-mile trip are ~0.13 MB instead of ~3 MB.
+  500-mile trip are ~0.2 MB instead of ~3 MB (including the heat-map grid).
 - The frontend splits MapLibre and React into separate cached chunks (see
   `vite.config.ts`) rather than shipping one large bundle.
 
