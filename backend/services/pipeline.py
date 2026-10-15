@@ -117,14 +117,6 @@ def build_route_plan(params: dict) -> dict:
             "forecast values and risk mileage excludes them."
         )
 
-    if weather_available and sources:
-        providers = weather_client.providers
-        if providers and providers[0] not in sources:
-            warnings.append(
-                f"The primary weather provider ({providers[0]}) was unavailable; "
-                f"weather data was sourced from the fallback provider ({', '.join(sources)})."
-            )
-
     for route in route_results:
         for checkpoint in route.checkpoints:
             series = (

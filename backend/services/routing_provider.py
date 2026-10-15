@@ -123,9 +123,6 @@ def get_alternatives(
             try:
                 routes = [_ors_directions(origin, destination, alternatives=False)[0]]
             except (RoutingProviderError, IndexError):
-                warnings.append(
-                    "OpenRouteService was unavailable; using the OSRM demo server."
-                )
                 routes = []
 
     if len(routes) < 3:
@@ -133,7 +130,6 @@ def get_alternatives(
             osrm_routes = _osrm_alternatives(origin, destination, warnings)
         except RoutingProviderError:
             osrm_routes = []
-            warnings.append("The OSRM demo server was unreachable.")
         for candidate in osrm_routes:
             if len(routes) >= 3:
                 break
