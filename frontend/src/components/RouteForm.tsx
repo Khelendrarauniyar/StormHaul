@@ -106,7 +106,7 @@ export function RouteForm({ onSubmit, loading }: RouteFormProps) {
         <span>Load weight (lb)</span>
         <input
           type="number"
-          min={1}
+          min={500}
           max={500000}
           step={500}
           value={load}
