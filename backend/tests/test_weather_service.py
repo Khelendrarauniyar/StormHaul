@@ -75,7 +75,13 @@ class WeatherServiceTests(SimpleTestCase):
     def test_default_service_orders_primary_then_fallback(self):
         with mock.patch.dict("os.environ", {}, clear=True):
             service = build_weather_service()
-        self.assertEqual(service.providers, ["open-meteo", "met-no"])
+        self.assertEqual(service.providers, ["nws", "open-meteo", "met-no"])
+
+    def test_parses_comma_separated_provider_chain(self):
+        env = {"WEATHER_PROVIDER": "nws,open-meteo", "WEATHER_FALLBACK_PROVIDER": "met-no"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            service = build_weather_service()
+        self.assertEqual(service.providers, ["nws", "open-meteo", "met-no"])
 
     def test_bounds_each_provider_by_the_total_budget(self):
         class DeadlineProvider(FakeProvider):

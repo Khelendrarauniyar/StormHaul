@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from .exceptions import WeatherProviderError
 from .met_provider import MetNoClient
+from .nws_provider import NwsClient
 from .weather_provider import SeriesKey, WeatherClient, round_key
 
 logger = logging.getLogger(__name__)
@@ -92,12 +93,14 @@ class WeatherService:
 
 def build_weather_service() -> WeatherService:
     names: List[str] = []
-    for name in (
-        os.getenv("WEATHER_PROVIDER", "open-meteo").strip().lower(),
-        os.getenv("WEATHER_FALLBACK_PROVIDER", "met-no").strip().lower(),
+    for raw in (
+        os.getenv("WEATHER_PROVIDER", "nws,open-meteo"),
+        os.getenv("WEATHER_FALLBACK_PROVIDER", "met-no"),
     ):
-        if name and name not in names:
-            names.append(name)
+        for name in raw.split(","):
+            name = name.strip().lower()
+            if name and name not in names:
+                names.append(name)
 
     providers = []
     for name in names:
@@ -110,6 +113,8 @@ def build_weather_service() -> WeatherService:
 def _make_provider(name: str):
     if name == "open-meteo":
         return WeatherClient()
+    if name in {"nws", "noaa", "weather-gov"}:
+        return NwsClient()
     if name in {"met-no", "metno", "met"}:
         return MetNoClient()
     logger.warning("Unknown weather provider '%s'", name)

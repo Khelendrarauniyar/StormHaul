@@ -23,7 +23,7 @@ services:
       - key: ORS_API_KEY
         sync: false
       - key: WEATHER_PROVIDER
-        value: open-meteo
+        value: nws,open-meteo
       - key: WEATHER_FALLBACK_PROVIDER
         value: met-no
       - key: OPEN_METEO_API_KEY
